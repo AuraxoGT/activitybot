@@ -1,0 +1,15 @@
+{
+  "name": "discord-vc-tracker-bot",
+  "version": "1.0.0",
+  "description": "A Discord bot that tracks when users join voice channels and sends notifications after inactivity",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  },
+  "engines": {
+    "node": ">=16.9.0"
+  }
+}
