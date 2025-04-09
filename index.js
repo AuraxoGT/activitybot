@@ -1,13 +1,13 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
 // Bot configuration
 const config = {
   token: process.env.TOKEN, // Using environment variable for token
-  prefix: '!',
   adminRoleId: '959449311366766622', // Admin ID
-  notificationChannelId: '', // Will be set with !setnotifchannel command
+  narysRoleId: '', // This will be set with /setnarysrole command
+  notificationChannelId: '', // Will be set with /setnotifchannel command
   checkInterval: 12 * 60 * 60 * 1000, // Check every 12 hours
   inactiveThreshold: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 };
@@ -19,11 +19,96 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers, // Added to get member roles
   ],
 });
 
 // Path to store user data
 const DATA_PATH = path.join(__dirname, 'vcUserData.json');
+const CONFIG_PATH = path.join(__dirname, 'botConfig.json');
+
+// Setup slash commands
+const commands = [
+  new SlashCommandBuilder()
+    .setName('vcstatus')
+    .setDescription('Show all Narys members\' last voice activity'),
+  new SlashCommandBuilder()
+    .setName('vcinactive')
+    .setDescription('Show only inactive Narys members (>7 days)'),
+  new SlashCommandBuilder()
+    .setName('vcsearch')
+    .setDescription('Search for Narys members by name')
+    .addStringOption(option => 
+      option.setName('username')
+        .setDescription('Username to search for')
+        .setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('vcrefresh')
+    .setDescription('[Admin] Refresh tracking for all Narys members'),
+  new SlashCommandBuilder()
+    .setName('vctest')
+    .setDescription('[Admin] Add user to tracking as inactive for testing notifications')
+    .addUserOption(option => 
+      option.setName('user')
+        .setDescription('User to mark as inactive (defaults to you)')
+        .setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('vcclear')
+    .setDescription('[Admin] Clear all tracking data'),
+  new SlashCommandBuilder()
+    .setName('vcreset')
+    .setDescription('[Admin] Reset a user\'s notification status')
+    .addUserOption(option => 
+      option.setName('user')
+        .setDescription('User to reset notification status for')
+        .setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('setnarysrole')
+    .setDescription('[Admin] Set the Narys role ID for tracking')
+    .addStringOption(option => 
+      option.setName('roleid')
+        .setDescription('Role ID to track')
+        .setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('setnotifchannel')
+    .setDescription('[Admin] Set current channel as notification channel'),
+  new SlashCommandBuilder()
+    .setName('vcconfig')
+    .setDescription('[Admin] Show current bot configuration'),
+  new SlashCommandBuilder()
+    .setName('vchelp')
+    .setDescription('Display help information about the bot'),
+];
+
+// Load configuration
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const data = fs.readFileSync(CONFIG_PATH, 'utf8');
+      const savedConfig = JSON.parse(data);
+      // Update config with saved values
+      config.narysRoleId = savedConfig.narysRoleId || '';
+      config.notificationChannelId = savedConfig.notificationChannelId || '';
+      console.log('Loaded saved configuration');
+    }
+  } catch (error) {
+    console.error('Error loading configuration:', error);
+  }
+}
+
+// Save configuration
+function saveConfig() {
+  try {
+    const configToSave = {
+      narysRoleId: config.narysRoleId,
+      notificationChannelId: config.notificationChannelId
+    };
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(configToSave, null, 2), 'utf8');
+    console.log('Saved configuration');
+  } catch (error) {
+    console.error('Error saving configuration:', error);
+  }
+}
 
 // Load user data
 function loadUserData() {
@@ -72,72 +157,165 @@ function getRelativeTimeString(timestamp) {
   return `${formatTimeDifference(diff)} ago`;
 }
 
+// Check if a member has the Narys role
+function hasNarysRole(member) {
+  if (!config.narysRoleId) return false;
+  return member.roles.cache.has(config.narysRoleId);
+}
+
+// Check if a user is an admin
+function isAdmin(userId) {
+  return userId === config.adminRoleId;
+}
+
 // User data object
 let userData = loadUserData();
 
-// Client ready event
-client.once('ready', () => {
+// Register slash commands when bot is ready
+client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
-  console.log(`Tracking voice channel inactivity for all users with 7-day threshold`);
   
-  // Initialize tracking for all guild members that are already in voice channels
-  client.guilds.cache.forEach(guild => {
-    guild.members.cache.forEach(member => {
-      if (member.voice.channelId) {
-        userData[member.id] = {
-          username: member.user.tag,
-          lastActive: Date.now(),
-          notified: false
-        };
-      }
-    });
-  });
+  // Load saved configuration
+  loadConfig();
   
-  saveUserData(userData);
+  // Register slash commands
+  try {
+    console.log('Started refreshing application (/) commands.');
+    
+    const rest = new REST({ version: '10' }).setToken(config.token);
+    
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands.map(command => command.toJSON()) },
+    );
+    
+    console.log('Successfully reloaded application (/) commands.');
+  } catch (error) {
+    console.error(error);
+  }
+  
+  console.log(`Tracking voice channel inactivity for users with Narys role (7-day threshold)`);
+  
+  if (config.narysRoleId) {
+    console.log(`Narys Role ID: ${config.narysRoleId}`);
+    await refreshNarysMemberTracking();
+  } else {
+    console.log('Narys Role ID not set. Use /setnarysrole to set it');
+  }
   
   // Start checking for inactive users
   checkInactiveUsers();
   setInterval(checkInactiveUsers, config.checkInterval);
 });
 
+// Function to refresh tracking for all Narys members
+async function refreshNarysMemberTracking() {
+  if (!config.narysRoleId) {
+    console.log('Cannot refresh Narys members: Role ID not set');
+    return;
+  }
+  
+  console.log('Refreshing Narys member tracking...');
+  let trackedCount = 0;
+  
+  try {
+    // Process all guilds the bot is in
+    for (const guild of client.guilds.cache.values()) {
+      // Fetch all members with the Narys role
+      console.log(`Fetching members for guild: ${guild.name}`);
+      
+      // Ensure members are cached
+      await guild.members.fetch();
+      
+      // Find members with Narys role
+      guild.members.cache.forEach(member => {
+        if (hasNarysRole(member)) {
+          // Add/update member in tracking data
+          const userId = member.id;
+          
+          // Only update if not already tracking
+          if (!userData[userId]) {
+            userData[userId] = {
+              username: member.user.tag,
+              lastActive: Date.now(), // Start tracking from now
+              notified: false,
+              guildId: guild.id,
+              guildName: guild.name
+            };
+            trackedCount++;
+          }
+        }
+      });
+    }
+    
+    saveUserData(userData);
+    console.log(`Added ${trackedCount} new Narys members to tracking`);
+    return trackedCount;
+  } catch (error) {
+    console.error('Error refreshing Narys members:', error);
+    return 0;
+  }
+}
+
 // Voice state update event
 client.on('voiceStateUpdate', (oldState, newState) => {
   // If a user joins a voice channel
   if (!oldState.channelId && newState.channelId) {
     const userId = newState.member.id;
-    const username = newState.member.user.tag;
     
-    // Update the last active timestamp
-    userData[userId] = {
-      username: username,
-      lastActive: Date.now(),
-      notified: false
-    };
-    
-    saveUserData(userData);
-    console.log(`User ${username} joined voice channel, updated timestamp.`);
+    // Check if user has Narys role
+    if (hasNarysRole(newState.member)) {
+      const username = newState.member.user.tag;
+      
+      // Update the last active timestamp
+      userData[userId] = {
+        username: username,
+        lastActive: Date.now(),
+        notified: false,
+        guildId: newState.guild.id,
+        guildName: newState.guild.name
+      };
+      
+      saveUserData(userData);
+      console.log(`Narys member ${username} joined voice channel, updated timestamp.`);
+    }
   }
 });
 
-// Message event
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (!message.content.startsWith(config.prefix)) return;
+// Member update event (track role changes)
+client.on('guildMemberUpdate', (oldMember, newMember) => {
+  const hadNarysRole = oldMember.roles.cache.has(config.narysRoleId);
+  const hasNarysRoleNow = newMember.roles.cache.has(config.narysRoleId);
   
-  // Check if user is an admin
-  const isAdmin = message.author.id === config.adminRoleId;
+  // If member gained Narys role
+  if (!hadNarysRole && hasNarysRoleNow) {
+    userData[newMember.id] = {
+      username: newMember.user.tag,
+      lastActive: Date.now(),
+      notified: false,
+      guildId: newMember.guild.id,
+      guildName: newMember.guild.name
+    };
+    saveUserData(userData);
+    console.log(`User ${newMember.user.tag} gained Narys role, added to tracking.`);
+  }
   
-  const args = message.content.slice(config.prefix.length).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
-  
-  // Command handling
-  switch (command) {
+  // If member lost Narys role, we could remove them from tracking
+  // But let's keep them for historical purposes
+});
+
+// Interaction event (slash commands)
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  // Handle each slash command
+  switch (interaction.commandName) {
     case 'vcstatus':
       // Create an embed for the status report
       const statusEmbed = new EmbedBuilder()
-        .setTitle('Voice Channel Activity Status')
+        .setTitle('Narys Members Voice Activity Status')
         .setColor(0x0099FF)
-        .setDescription('List of users and their last voice channel activity:')
+        .setDescription('List of Narys members and their last voice channel activity:')
         .setTimestamp();
       
       let userCount = 0;
@@ -175,30 +353,73 @@ client.on('messageCreate', async (message) => {
       // Add summary field
       statusEmbed.addFields({ 
         name: 'Summary', 
-        value: `Total tracked users: ${userCount}\nInactive (>7 days): ${inactiveCount}` 
+        value: `Total tracked Narys members: ${userCount}\nInactive (>7 days): ${inactiveCount}` 
       });
       
-      message.channel.send({ embeds: [statusEmbed] });
+      await interaction.reply({ embeds: [statusEmbed] });
+      break;
+      
+    case 'vcinactive':
+      // Show only inactive users
+      const inactiveEmbed = new EmbedBuilder()
+        .setTitle('Inactive Narys Members')
+        .setColor(0xFF0000)
+        .setDescription('List of Narys members inactive for 7+ days:')
+        .setTimestamp();
+      
+      let inactiveList = '';
+      let inactiveUserCount = 0;
+      
+      // Get entries sorted by lastActive (oldest first)
+      const inactiveEntries = Object.entries(userData)
+        .filter(([_, data]) => (Date.now() - data.lastActive) >= config.inactiveThreshold)
+        .sort((a, b) => a[1].lastActive - b[1].lastActive);
+      
+      for (const [userId, data] of inactiveEntries) {
+        inactiveUserCount++;
+        const relativeTime = getRelativeTimeString(data.lastActive);
+        const lastActiveDate = new Date(data.lastActive).toLocaleDateString();
+        
+        // Format the entry
+        inactiveList += `🔴 **${data.username}**: Last active ${relativeTime} (${lastActiveDate})\n`;
+        
+        // Split into multiple fields if needed
+        if (inactiveList.length > 900 || inactiveUserCount % 15 === 0) {
+          inactiveEmbed.addFields({ name: `Inactive Users ${inactiveUserCount-14}-${inactiveUserCount}`, value: inactiveList });
+          inactiveList = '';
+        }
+      }
+      
+      // Add any remaining users
+      if (inactiveList.length > 0) {
+        inactiveEmbed.addFields({ name: `Inactive Users ${inactiveUserCount-inactiveList.split('\n').length+1}-${inactiveUserCount}`, value: inactiveList });
+      }
+      
+      if (inactiveUserCount === 0) {
+        inactiveEmbed.setDescription('No Narys members are currently inactive for 7+ days.');
+      } else {
+        inactiveEmbed.addFields({ 
+          name: 'Summary', 
+          value: `Total inactive Narys members: ${inactiveUserCount}` 
+        });
+      }
+      
+      await interaction.reply({ embeds: [inactiveEmbed] });
       break;
       
     case 'vcsearch':
-      if (!args[0]) {
-        message.reply('Please provide a username to search for.');
-        return;
-      }
-      
-      const searchTerm = args.join(' ').toLowerCase();
+      const searchTerm = interaction.options.getString('username').toLowerCase();
       const matches = Object.entries(userData).filter(([_, data]) => 
         data.username.toLowerCase().includes(searchTerm)
       );
       
       if (matches.length === 0) {
-        message.reply(`No users found matching "${args.join(' ')}".`);
+        await interaction.reply(`No Narys members found matching "${searchTerm}".`);
         return;
       }
       
       const searchEmbed = new EmbedBuilder()
-        .setTitle(`Search Results for "${args.join(' ')}"`)
+        .setTitle(`Search Results for "${searchTerm}"`)
         .setColor(0x0099FF)
         .setTimestamp();
       
@@ -212,28 +433,46 @@ client.on('messageCreate', async (message) => {
       });
       
       searchEmbed.setDescription(resultList);
-      message.channel.send({ embeds: [searchEmbed] });
+      await interaction.reply({ embeds: [searchEmbed] });
       break;
       
-    case 'vctest':
-      if (!isAdmin) {
-        message.reply('You do not have permission to use this command.');
+    case 'vcrefresh':
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         return;
       }
       
-      const testUserId = args[0] || message.author.id;
-      const testUsername = (args[0] && message.mentions.users.first()) ? 
-        message.mentions.users.first().tag : message.author.tag;
+      if (!config.narysRoleId) {
+        await interaction.reply({ content: '❌ Narys role ID not set. Use /setnarysrole first.', ephemeral: true });
+        return;
+      }
+      
+      await interaction.deferReply();
+      const trackedCount = await refreshNarysMemberTracking();
+      await interaction.editReply(`✅ Refreshed Narys member tracking. Now tracking ${Object.keys(userData).length} members.`);
+      break;
+      
+    case 'vctest':
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+        return;
+      }
+      
+      const testUser = interaction.options.getUser('user') || interaction.user;
+      const testUserId = testUser.id;
+      const testUsername = testUser.tag;
       
       // Set user as inactive for testing
       userData[testUserId] = {
         username: testUsername,
         lastActive: Date.now() - config.inactiveThreshold - 1000, // Already inactive
-        notified: false
+        notified: false,
+        guildId: interaction.guild.id,
+        guildName: interaction.guild.name
       };
       
       saveUserData(userData);
-      message.reply(`Added ${testUsername} to tracking with inactive status for testing. Check notification channel in a few seconds.`);
+      await interaction.reply(`Added ${testUsername} to tracking with inactive status for testing. Check notification channel in a few seconds.`);
       
       // Force check for inactive users
       setTimeout(checkInactiveUsers, 2000);
@@ -241,49 +480,53 @@ client.on('messageCreate', async (message) => {
       
     case 'vchelp':
       const helpEmbed = new EmbedBuilder()
-        .setTitle('VC Tracker Bot Help')
+        .setTitle('Narys VC Tracker Bot Help')
         .setColor(0x00FF00)
         .addFields(
-          { name: `${config.prefix}vcstatus`, value: 'Show all users\' last voice activity' },
-          { name: `${config.prefix}vcsearch [username]`, value: 'Search for users by name' },
-          { name: `${config.prefix}vctest [@user]`, value: '[Admin] Add yourself or mentioned user to tracking as inactive for testing notifications' },
-          { name: `${config.prefix}vcclear`, value: '[Admin] Clear all tracking data' },
-          { name: `${config.prefix}vcreset [@user]`, value: '[Admin] Reset a user\'s notification status' },
-          { name: `${config.prefix}setnotifchannel`, value: '[Admin] Set current channel as notification channel' },
-          { name: `${config.prefix}vcconfig`, value: '[Admin] Show current bot configuration' },
-          { name: `${config.prefix}vchelp`, value: 'Display this help message' }
+          { name: `/vcstatus`, value: 'Show all Narys members\' last voice activity' },
+          { name: `/vcinactive`, value: 'Show only inactive Narys members (>7 days)' },
+          { name: `/vcsearch [username]`, value: 'Search for Narys members by name' },
+          { name: `/vcrefresh`, value: '[Admin] Refresh tracking for all Narys members' },
+          { name: `/vctest [@user]`, value: '[Admin] Add yourself or mentioned user to tracking as inactive for testing notifications' },
+          { name: `/vcclear`, value: '[Admin] Clear all tracking data' },
+          { name: `/vcreset [@user]`, value: '[Admin] Reset a user\'s notification status' },
+          { name: `/setnarysrole [roleID]`, value: '[Admin] Set the Narys role ID for tracking' },
+          { name: `/setnotifchannel`, value: '[Admin] Set current channel as notification channel' },
+          { name: `/vcconfig`, value: '[Admin] Show current bot configuration' },
+          { name: `/vchelp`, value: 'Display this help message' }
         )
         .setFooter({ text: 'Inactivity threshold: 7 days' });
       
-      message.channel.send({ embeds: [helpEmbed] });
+      await interaction.reply({ embeds: [helpEmbed] });
       break;
       
     case 'vcclear':
-      if (!isAdmin) {
-        message.reply('You do not have permission to use this command.');
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         return;
       }
       
       userData = {};
       saveUserData(userData);
-      message.reply('✅ Voice activity tracking data has been cleared.');
+      await interaction.reply('✅ Voice activity tracking data has been cleared.');
       break;
       
     case 'vcreset':
-      if (!isAdmin) {
-        message.reply('You do not have permission to use this command.');
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         return;
       }
       
-      // If a user is mentioned, reset just that user
-      if (args[0] && message.mentions.users.first()) {
-        const resetUserId = message.mentions.users.first().id;
+      // If a user is specified, reset just that user
+      const userToReset = interaction.options.getUser('user');
+      if (userToReset) {
+        const resetUserId = userToReset.id;
         if (userData[resetUserId]) {
           userData[resetUserId].notified = false;
           saveUserData(userData);
-          message.reply(`✅ Reset notification status for ${userData[resetUserId].username}.`);
+          await interaction.reply(`✅ Reset notification status for ${userData[resetUserId].username}.`);
         } else {
-          message.reply(`User not found in tracking data.`);
+          await interaction.reply(`User not found in tracking data.`);
         }
         return;
       }
@@ -294,46 +537,68 @@ client.on('messageCreate', async (message) => {
       }
       
       saveUserData(userData);
-      message.reply('✅ Reset notification status for all users.');
+      await interaction.reply('✅ Reset notification status for all users.');
       break;
       
-    case 'setnotifchannel':
-      if (!isAdmin) {
-        message.reply('You do not have permission to use this command.');
+    case 'setnarysrole':
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         return;
       }
       
-      config.notificationChannelId = message.channel.id;
-      message.reply(`✅ Set notification channel to this channel (${message.channel.id})`);
+      const roleId = interaction.options.getString('roleid');
+      // Verify this is a valid role ID format
+      if (!/^\d+$/.test(roleId)) {
+        await interaction.reply({ content: 'Invalid role ID format. Please provide a valid role ID.', ephemeral: true });
+        return;
+      }
+      
+      config.narysRoleId = roleId;
+      saveConfig();
+      
+      await interaction.deferReply();
+      await refreshNarysMemberTracking();
+      await interaction.editReply(`✅ Set Narys role ID to ${roleId}. Now tracking ${Object.keys(userData).length} members with Narys role.`);
+      break;
+      
+    case 'setnotifchannel':
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+        return;
+      }
+      
+      config.notificationChannelId = interaction.channel.id;
+      saveConfig();
+      await interaction.reply(`✅ Set notification channel to this channel (${interaction.channel.id})`);
       break;
       
     case 'vcconfig':
-      if (!isAdmin) {
-        message.reply('You do not have permission to use this command.');
+      if (!isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         return;
       }
       
       const configEmbed = new EmbedBuilder()
-        .setTitle('VC Tracker Bot Configuration')
+        .setTitle('Narys VC Tracker Bot Configuration')
         .setColor(0x00FFFF)
         .addFields(
-          { name: 'Admin Role ID', value: config.adminRoleId },
+          { name: 'Admin ID', value: config.adminRoleId },
+          { name: 'Narys Role ID', value: config.narysRoleId || 'Not set' },
           { name: 'Notification Channel', value: config.notificationChannelId || 'Not set' },
           { name: 'Check Interval', value: `${config.checkInterval / (60 * 60 * 1000)} hours` },
           { name: 'Inactive Threshold', value: `${config.inactiveThreshold / (24 * 60 * 60 * 1000)} days` },
-          { name: 'Prefix', value: config.prefix },
-          { name: 'Users Tracked', value: `${Object.keys(userData).length}` }
+          { name: 'Narys Members Tracked', value: `${Object.keys(userData).length}` }
         )
         .setTimestamp();
       
-      message.channel.send({ embeds: [configEmbed] });
+      await interaction.reply({ embeds: [configEmbed] });
       break;
   }
 });
 
 // Function to check for inactive users
 async function checkInactiveUsers() {
-  console.log('Checking for inactive users...');
+  console.log('Checking for inactive Narys members...');
   const currentTime = Date.now();
   
   for (const [userId, data] of Object.entries(userData)) {
@@ -353,12 +618,13 @@ async function checkInactiveUsers() {
           const channel = await client.channels.fetch(config.notificationChannelId);
           if (channel) {
             const inactiveEmbed = new EmbedBuilder()
-              .setTitle('⚠️ User Inactivity Alert')
+              .setTitle('⚠️ Narys Member Inactivity Alert')
               .setColor(0xFF0000)
               .setDescription(`**${data.username}** hasn't joined a voice channel in **${formatTimeDifference(timeSinceActive)}**.`)
               .addFields(
                 { name: 'User ID', value: userId },
-                { name: 'Last Active', value: new Date(data.lastActive).toLocaleString() }
+                { name: 'Last Active', value: new Date(data.lastActive).toLocaleString() },
+                { name: 'Server', value: data.guildName || 'Unknown' }
               )
               .setTimestamp();
               
@@ -366,7 +632,7 @@ async function checkInactiveUsers() {
             console.log(`Sent inactivity notification for user ${data.username}`);
           }
         } else {
-          console.log('No notification channel set. Use !setnotifchannel in a channel to set it.');
+          console.log('No notification channel set. Use /setnotifchannel in a channel to set it.');
         }
       } catch (error) {
         console.error('Error sending notification:', error);
@@ -374,22 +640,6 @@ async function checkInactiveUsers() {
     }
   }
 }
-
-// Additional functionality to track all members at bot startup
-client.on('guildCreate', (guild) => {
-  console.log(`Joined new guild: ${guild.name}`);
-  // Initialize tracking for all members in voice channels
-  guild.members.cache.forEach(member => {
-    if (member.voice.channelId) {
-      userData[member.id] = {
-        username: member.user.tag,
-        lastActive: Date.now(),
-        notified: false
-      };
-    }
-  });
-  saveUserData(userData);
-});
 
 // Error handling
 client.on('error', console.error);
