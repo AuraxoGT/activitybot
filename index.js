@@ -6,7 +6,7 @@ const path = require('path');
 const config = {
   token: process.env.TOKEN, // Using environment variable for token
   prefix: '!',
-  adminRoleId: '1325853526047326250', // Admin ID
+  adminRoleId: '959449311366766622', // Admin ID
   narysRoleId: '', // This will be set with !setnarysrole command
   notificationChannelId: '', // Will be set with !setnotifchannel command
   checkInterval: 12 * 60 * 60 * 1000, // Check every 12 hours
@@ -143,11 +143,26 @@ async function refreshNarysMemberTracking() {
   }
   
   console.log('Refreshing Narys member tracking...');
+  console.log(`Using Narys Role ID: ${config.narysRoleId}`);
   let trackedCount = 0;
   
   try {
+    // Log guild information
+    console.log(`Bot is in ${client.guilds.cache.size} guilds`);
+    
     // Process all guilds the bot is in
     for (const guild of client.guilds.cache.values()) {
+      console.log(`Processing guild: ${guild.name} (${guild.id})`);
+      
+      // Check if the Narys role exists in this guild
+      const narysRole = guild.roles.cache.get(config.narysRoleId);
+      if (!narysRole) {
+        console.log(`Warning: Narys role (${config.narysRoleId}) not found in guild ${guild.name}`);
+        continue;
+      }
+      
+      console.log(`Found Narys role: ${narysRole.name} (${narysRole.id})`);
+      
       // Fetch all members with the Narys role
       console.log(`Fetching members for guild: ${guild.name}`);
       
@@ -235,7 +250,8 @@ client.on('messageCreate', async (message) => {
   if (!message.content.startsWith(config.prefix)) return;
   
   // Check if user is an admin
-  const isAdmin = message.author.id === config.adminRoleId;
+  // FIXED: Check if user has the admin role instead of comparing IDs
+  const isAdmin = message.member && message.member.roles.cache.has(config.adminRoleId);
   
   const args = message.content.slice(config.prefix.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
@@ -374,6 +390,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'vcrefresh':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
@@ -390,6 +411,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'vctest':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
@@ -438,6 +464,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'vcclear':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
@@ -449,6 +480,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'vcreset':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
@@ -477,6 +513,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'setnarysrole':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
@@ -494,9 +535,16 @@ client.on('messageCreate', async (message) => {
         return;
       }
       
+      // Check if the role exists in the guild
+      const role = message.guild.roles.cache.get(roleId);
+      if (!role) {
+        message.reply(`Could not find a role with ID ${roleId} in this server. Please verify the ID.`);
+        return;
+      }
+      
       config.narysRoleId = roleId;
       saveConfig();
-      message.reply(`✅ Set Narys role ID to ${roleId}`);
+      message.reply(`✅ Set Narys role ID to ${roleId} (${role.name})`);
       
       // Refresh member tracking
       await refreshNarysMemberTracking();
@@ -504,6 +552,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'setnotifchannel':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
@@ -515,6 +568,11 @@ client.on('messageCreate', async (message) => {
       break;
       
     case 'vcconfig':
+      // Debug logs for admin permission
+      console.log(`Command attempt by: ${message.author.tag} (${message.author.id})`);
+      console.log(`Admin role ID: ${config.adminRoleId}`);
+      console.log(`User has admin role: ${isAdmin}`);
+      
       if (!isAdmin) {
         message.reply('You do not have permission to use this command.');
         return;
