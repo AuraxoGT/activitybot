@@ -6,7 +6,7 @@ const path = require('path');
 const config = {
   token: process.env.TOKEN, // Using environment variable for token
   prefix: '!',
-  adminRoleId: '959449311366766622', // Admin ID
+  adminRoleId: '1325853526047326250', // Admin ID
   narysRoleId: '', // This will be set with !setnarysrole command
   notificationChannelId: '', // Will be set with !setnotifchannel command
   checkInterval: 12 * 60 * 60 * 1000, // Check every 12 hours
